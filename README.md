@@ -5,6 +5,7 @@
 빌드: `Unity -batchmode -quit -projectPath . -buildTarget Android -executeMethod EosaBlade.Editor.BuildScript.AndroidLite` → `Builds/eosa_blade_v<버전>_lite.apk`
 
 ## 변경 내역
+- v0.2.6 — 보스 속도·무작위 패턴·공격 직전 번쩍임, 4연격·마패 3연참·패링 후 역습, 카메라 근접, 효과음 교체, 앱 아이콘, 가로 180° 회전
 - v0.2.5 — 칼 막기·패링 자세 직접 구현(방패 모션 대체), 공격 연타 변형, 엉덩이 흔들림 고정
 - v0.2.4 — 캐릭터 겹침 수정(최소 간격 2.25, 돌진 거리 제한)
 - v0.2.3 — 찌르기 공중부양·왼쪽 빈칸·인살 놓침 체력 회복 수정, 2페이즈 회전베기·충격파

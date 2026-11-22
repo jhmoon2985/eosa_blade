@@ -16,7 +16,8 @@ namespace EosaBlade
         Staggered,
         ExecutionFinish,
         DodgeLeap,
-        SpinSlash
+        SpinSlash,
+        StanceBrokenKneel
     }
 
     /// <summary>
@@ -78,6 +79,7 @@ namespace EosaBlade
         private float _guardImpactTimer;
         private int _parryVariant;
         private int _attackVariant = 1;
+        private int _staggerVariant;
         private const float ParryAnimDuration = 0.28f;
         private const float ParryAttemptDuration = 0.22f;
         private const float GuardImpactDuration = 0.18f;
@@ -86,6 +88,7 @@ namespace EosaBlade
         // Cached Animator state hashes (zero string GC)
         private static readonly int HashIdle = Animator.StringToHash("Idle");
         private static readonly int HashRun = Animator.StringToHash("Run");
+        private static readonly int HashRunBack = Animator.StringToHash("RunBack");
         private static readonly int HashBlockIdle = Animator.StringToHash("BlockIdle");
         private static readonly int HashParry = Animator.StringToHash("Parry");
         private static readonly int HashSlash = Animator.StringToHash("Slash");
@@ -103,9 +106,9 @@ namespace EosaBlade
         private static readonly int ColorId = Shader.PropertyToID("_Color");
         private static readonly int EmissionColorId = Shader.PropertyToID("_EmissionColor");
 
-        private static readonly Color TrailNormalColor = new Color(0.91f, 0.94f, 0.97f, 0.85f);
-        private static readonly Color TrailGoldColor = new Color(0.98f, 0.78f, 0.12f, 0.95f);
-        private static readonly Color TrailCrimsonColor = new Color(0.92f, 0.16f, 0.16f, 0.95f);
+        private static readonly Color TrailNormalColor = new Color(0.82f, 0.95f, 1.0f, 0.98f);
+        private static readonly Color TrailGoldColor = new Color(1.0f, 0.84f, 0.16f, 1.0f);
+        private static readonly Color TrailCrimsonColor = new Color(1.0f, 0.22f, 0.16f, 1.0f);
 
         public void BindHumanoid(
             Animator anim,
@@ -187,9 +190,9 @@ namespace EosaBlade
             }
         }
 
-        public void SetMoveSpeed(float speed01)
+        public void SetMoveSpeed(float signedSpeed)
         {
-            _moveSpeed = Mathf.Clamp01(speed01);
+            _moveSpeed = Mathf.Clamp(signedSpeed, -1f, 1f);
         }
 
         public void SetDead(bool dead)
@@ -221,7 +224,7 @@ namespace EosaBlade
                               _pose == WeaponPose.WindupThrustPerilous);
             _pose = pose;
             _perilousGlow = (pose == WeaponPose.WindupThrustPerilous);
-            _staggerPulse = (pose == WeaponPose.Staggered);
+            _staggerPulse = (pose == WeaponPose.Staggered || pose == WeaponPose.StanceBrokenKneel);
 
             if (_isDead || humanoidAnimator == null) return;
 
@@ -233,8 +236,10 @@ namespace EosaBlade
                     break;
 
                 case WeaponPose.Guard:
-                    humanoidAnimator.speed = _moveSpeed > 0.1f ? 0.85f : 1.05f;
-                    PlayAnim(_moveSpeed > 0.1f ? HashRun : HashBlockIdle, 0.06f, forceRestart: false);
+                    float absSpd = Mathf.Abs(_moveSpeed);
+                    humanoidAnimator.speed = absSpd > 0.1f ? 0.85f : 1.05f;
+                    int guardLoco = _moveSpeed < -0.1f ? HashRunBack : (_moveSpeed > 0.1f ? HashRun : HashBlockIdle);
+                    PlayAnim(guardLoco, 0.06f, forceRestart: false);
                     _swordDefenseBlend = 1f;
                     _swordAttackBlend = 0f;
                     if (!_bonesCached) CacheHumanoidBones();
@@ -339,12 +344,24 @@ namespace EosaBlade
                     break;
 
                 case WeaponPose.Staggered:
-                    humanoidAnimator.speed = 0.95f;
-                    // Start at 0.10s (90% peak recoil jolt) so on Frame 0 of Blade-Bite Hitstop, the enemy's chest visibly wrenches back around the buried blade!
-                    if (changed) _staggerAnimElapsed = 0.10f;
+                    humanoidAnimator.speed = 1.05f;
+                    // Alternate between Backward Wrench Collapse and Forward Gut-Fold Crumple on every hit!
+                    _staggerAnimElapsed = 0.09f;
+                    _staggerVariant = (_staggerVariant + 1) & 1;
                     _swordAttackBlend = 1f;
                     _swordDefenseBlend = 0f;
-                    PlayAnim(HashImpact, 0.04f, forceRestart: changed);
+                    PlayAnim(HashImpact, 0.03f, forceRestart: true, normalizedTimeOffset: 0.14f);
+                    if (!_bonesCached) CacheHumanoidBones();
+                    ApplySwordAttackPose(1f);
+                    SetTrail(false, TrailNormalColor);
+                    break;
+
+                case WeaponPose.StanceBrokenKneel:
+                    humanoidAnimator.speed = 0.70f;
+                    if (changed) _staggerAnimElapsed = 0.12f;
+                    _swordAttackBlend = 1f;
+                    _swordDefenseBlend = 0f;
+                    PlayAnim(HashImpact, 0.06f, forceRestart: changed, normalizedTimeOffset: 0.22f);
                     if (!_bonesCached) CacheHumanoidBones();
                     ApplySwordAttackPose(1f);
                     SetTrail(false, TrailNormalColor);
@@ -435,9 +452,14 @@ namespace EosaBlade
             _parryAttemptTimer = 0f;
             _guardImpactTimer = 0f;
             _swordDefenseBlend = IsSwordDefensePose(pose) ? 1f : 0f;
+            _swordAttackBlend = IsSwordAttackOrRecoilPose(pose) ? 1f : 0f;
             ClampHipsHorizontalDrift();
             if (_swordDefenseBlend > 0.001f)
                 ApplySwordDefensePose(_swordDefenseBlend);
+            else if (_swordAttackBlend > 0.001f)
+                ApplySwordAttackPose(_swordAttackBlend);
+            else if (pose == WeaponPose.Idle)
+                ApplySwordLocomotionPose();
         }
 
         private static bool IsSwordDefensePose(WeaponPose pose)
@@ -454,7 +476,8 @@ namespace EosaBlade
                    pose == WeaponPose.SpinSlash ||
                    pose == WeaponPose.ThrustExtend ||
                    pose == WeaponPose.ExecutionFinish ||
-                   pose == WeaponPose.Staggered;
+                   pose == WeaponPose.Staggered ||
+                   pose == WeaponPose.StanceBrokenKneel;
         }
 
         private void Update()
@@ -489,6 +512,10 @@ namespace EosaBlade
             else if (_swordAttackBlend > 0.001f)
             {
                 ApplySwordAttackPose(_swordAttackBlend);
+            }
+            else if (_pose == WeaponPose.Idle)
+            {
+                ApplySwordLocomotionPose();
             }
         }
 
@@ -563,7 +590,7 @@ namespace EosaBlade
             if (rArmLen < 0.05f) rArmLen = 0.55f;
 
             // Base Ready Sword Guard (조선 환도 쌍수/중상단 방어 자세)
-            Vector3 targetRHand = rShoulder + fwd * (0.76f * rArmLen) - up * ((0.06f - 0.02f * breath) * rArmLen) - right * (0.10f * rArmLen);
+            Vector3 targetRHand = rShoulder + fwd * (0.84f * rArmLen) - up * ((0.08f - 0.02f * breath) * rArmLen) - right * (0.04f * rArmLen);
             Vector3 rPole = right * 0.80f - up * 0.70f - fwd * 0.15f;
             Vector3 desiredBladeDir = (up * 0.72f + fwd * 0.65f - right * 0.22f).normalized;
 
@@ -688,7 +715,7 @@ namespace EosaBlade
             // Re-read shoulder position after spine/chest/hips movement!
             rShoulder = _rightUpperArm.position;
             SolveTwoBoneArmIK(_rightUpperArm, _rightLowerArm, _rightHand, targetRHand, rPole, weight);
-            AimWeaponBlade(_rightHand, desiredBladeDir, weight);
+            AimWeaponBlade(_rightHand, _rightLowerArm, desiredBladeDir, weight);
 
             // 3. Left Arm (Dynamic two-hand hilt brace during Guard/Parry, counter-whip on ParryFlash, forward thrust on Ganpa!)
             if (_leftUpperArm != null && _leftLowerArm != null && _leftHand != null)
@@ -700,27 +727,33 @@ namespace EosaBlade
 
                 Vector3 targetLHand;
                 Vector3 lPole = -right * 0.72f - up * 0.72f - fwd * 0.25f;
+                bool leftGripsHilt = false;
 
                 if (_pose == WeaponPose.GanpaDeflect)
                 {
                     // Thrust the golden Mapae medallion forward during Ganpa / 삼마패 일격!
                     targetLHand = lShoulder + fwd * (0.88f * lArmLen) + up * (0.05f * lArmLen) + right * (0.10f * lArmLen);
                 }
-                else if (_pose == WeaponPose.ParryFlash)
+                else if (_pose == WeaponPose.ParryFlash && _parryVariant == 0)
                 {
-                    // Dynamic counter-whip on Variant 0, or two-handed pommel drive on Variant 1!
-                    if (_parryVariant == 0)
-                        targetLHand = lShoulder - fwd * (0.16f * lArmLen) - up * (0.42f * lArmLen) - right * (0.22f * lArmLen);
-                    else
-                        targetLHand = targetRHand - desiredBladeDir * 0.14f - right * 0.06f;
+                    // Dynamic counter-whip on Variant 0
+                    targetLHand = lShoulder - fwd * (0.16f * lArmLen) - up * (0.42f * lArmLen) - right * (0.22f * lArmLen);
                 }
                 else
                 {
-                    // Guard & Parry Press: Left hand braces dynamically right below the sword hilt/wrist (true two-handed Joseon 환도 guard!)
-                    targetLHand = targetRHand - desiredBladeDir * 0.15f - fwd * 0.04f - right * 0.06f;
+                    // Guard & Two-Handed Parry: Left palm wraps directly around the lower sword hilt right below the right palm!
+                    leftGripsHilt = true;
+                    Vector3 rPalmWorld = _weaponRoot != null ? _weaponRoot.position : (_rightHand.position + _rightHand.up * 0.13f);
+                    Vector3 desiredLPalm = rPalmWorld - desiredBladeDir * 0.11f;
+                    Vector3 lForearmEst = (desiredLPalm - lShoulder).normalized;
+                    targetLHand = desiredLPalm - lForearmEst * 0.12f;
                 }
 
                 SolveTwoBoneArmIK(_leftUpperArm, _leftLowerArm, _leftHand, targetLHand, lPole, weight);
+                if (leftGripsHilt)
+                {
+                    AimHandToHilt(_leftHand, _leftLowerArm, desiredBladeDir, weight);
+                }
             }
         }
 
@@ -756,6 +789,9 @@ namespace EosaBlade
             float p = Mathf.Clamp01(_attackAnimElapsed / AttackAnimDuration);
             float snapT = 1f - Mathf.Pow(1f - Mathf.Clamp01(p / 0.38f), 2f);
             float followT = p > 0.55f ? (p - 0.55f) / 0.45f : 0f;
+
+            Vector3 targetLHandOverride = Vector3.zero;
+            bool hasLHandOverride = false;
 
             switch (_pose)
             {
@@ -903,17 +939,53 @@ namespace EosaBlade
                     break;
 
                 case WeaponPose.Staggered:
-                    // Visceral Hit / Parry-Stagger Recoil: Whole torso wrenches backward from the blade bite!
-                    float st = Mathf.Clamp01(_staggerAnimElapsed / 0.28f);
+                    // Visceral Full-Body Sword-Hit Stance Buckle (칼에 맞았을 때 발은 바닥에 고정된 채 허리·상체가 크게 무너짐!):
+                    float st = Mathf.Clamp01(_staggerAnimElapsed / 0.32f);
                     float jolt = Mathf.Sin(st * Mathf.PI);
-                    hipsDrop = -0.09f * jolt;
-                    hipsFwd = -0.10f * jolt;
-                    torsoYaw = -22f * jolt;
-                    torsoPitch = -18f * jolt;
-                    headYaw = 16f * jolt;
-                    targetRHand = rShoulder + fwd * (0.35f * rArmLen) - up * (0.18f * rArmLen) + right * (0.42f * rArmLen);
-                    desiredBladeDir = (fwd * 0.45f + up * 0.55f + right * 0.70f).normalized;
                     twoHandedGrip = false;
+                    hasLHandOverride = true;
+                    hipsDrop = 0f; // Never push legs below y=0 floor!
+                    if (_staggerVariant == 0)
+                    {
+                        // Variant 0: Waist & Chest Wrenched Backward & Off-Balance (상체가 크게 뒤로 젖혀지며 칼든 팔이 벌어짐!)
+                        hipsFwd = -0.10f * jolt;
+                        torsoYaw = -36f * jolt;
+                        torsoPitch = -34f * jolt;
+                        headYaw = 26f * jolt;
+                        targetRHand = rShoulder + right * (0.64f * rArmLen) - up * (0.18f * rArmLen) - fwd * (0.22f * rArmLen);
+                        desiredBladeDir = (right * 0.72f + up * 0.35f - fwd * 0.58f).normalized;
+                        // Left hand clutches wounded chest/shoulder!
+                        targetLHandOverride = rShoulder + fwd * (0.28f * rArmLen) - up * (0.14f * rArmLen) - right * (0.18f * rArmLen);
+                    }
+                    else
+                    {
+                        // Variant 1: Deep Waist-Fold Crumple (복부를 베여 허리가 앞으로 푹 꺾이며 상체가 무너져 내림!)
+                        hipsFwd = -0.08f * jolt;
+                        torsoYaw = 28f * jolt;
+                        torsoPitch = 44f * jolt;
+                        headYaw = -22f * jolt;
+                        targetRHand = rShoulder + fwd * (0.42f * rArmLen) - up * (0.48f * rArmLen) + right * (0.32f * rArmLen);
+                        desiredBladeDir = (fwd * 0.68f - up * 0.66f + right * 0.32f).normalized;
+                        // Left hand clutches gut!
+                        targetLHandOverride = rShoulder + fwd * (0.28f * rArmLen) - up * (0.32f * rArmLen) - right * (0.22f * rArmLen);
+                    }
+                    break;
+
+                case WeaponPose.StanceBrokenKneel:
+                    // Complete Stance Collapse (가드 붕괴 / 체간 붕괴 인살 대기 — 허리가 깊게 꺾여 상체가 앞으로 축 늘어짐!):
+                    float pant = Mathf.Sin(Time.time * 9f);
+                    hipsDrop = 0f; // Keep feet planted on y=0 floor!
+                    hipsFwd = -0.06f;
+                    torsoYaw = 18f;
+                    torsoPitch = 50f + 4f * pant;
+                    headYaw = -16f;
+                    twoHandedGrip = false;
+                    hasLHandOverride = true;
+                    // Sword arm dangles low in front, guard completely shattered
+                    targetRHand = rShoulder + fwd * (0.44f * rArmLen) - up * (0.56f * rArmLen) + right * (0.24f * rArmLen);
+                    desiredBladeDir = (fwd * 0.55f - up * 0.78f + right * 0.28f).normalized;
+                    // Left hand hangs low clutching waist/knee
+                    targetLHandOverride = rShoulder + fwd * (0.38f * rArmLen) - up * (0.48f * rArmLen) - right * (0.24f * rArmLen);
                     break;
             }
 
@@ -941,7 +1013,7 @@ namespace EosaBlade
 
             rShoulder = _rightUpperArm.position;
             SolveTwoBoneArmIK(_rightUpperArm, _rightLowerArm, _rightHand, targetRHand, rPole, weight);
-            AimWeaponBlade(_rightHand, desiredBladeDir, weight);
+            AimWeaponBlade(_rightHand, _rightLowerArm, desiredBladeDir, weight);
 
             if (_leftUpperArm != null && _leftLowerArm != null && _leftHand != null)
             {
@@ -950,11 +1022,29 @@ namespace EosaBlade
                                 Vector3.Distance(_leftLowerArm.position, _leftHand.position);
                 if (lArmLen < 0.05f) lArmLen = 0.55f;
 
-                Vector3 targetLHand = twoHandedGrip
-                    ? targetRHand - desiredBladeDir * 0.14f - right * 0.06f
-                    : lShoulder - fwd * (0.18f * lArmLen) - up * (0.36f * lArmLen) - right * (0.24f * lArmLen);
+                Vector3 targetLHand;
+                if (hasLHandOverride)
+                {
+                    targetLHand = targetLHandOverride;
+                }
+                else if (twoHandedGrip)
+                {
+                    Vector3 rPalmWorld = _weaponRoot != null ? _weaponRoot.position : (_rightHand.position + _rightHand.up * 0.13f);
+                    Vector3 desiredLPalm = rPalmWorld - desiredBladeDir * 0.11f;
+                    Vector3 lForearmEst = (desiredLPalm - lShoulder).normalized;
+                    targetLHand = desiredLPalm - lForearmEst * 0.12f;
+                }
+                else
+                {
+                    targetLHand = lShoulder - fwd * (0.18f * lArmLen) - up * (0.36f * lArmLen) - right * (0.24f * lArmLen);
+                }
+
                 Vector3 lPole = -right * 0.72f - up * 0.72f - fwd * 0.25f;
                 SolveTwoBoneArmIK(_leftUpperArm, _leftLowerArm, _leftHand, targetLHand, lPole, weight);
+                if (twoHandedGrip && !hasLHandOverride)
+                {
+                    AimHandToHilt(_leftHand, _leftLowerArm, desiredBladeDir, weight);
+                }
             }
         }
 
@@ -1006,14 +1096,134 @@ namespace EosaBlade
             }
         }
 
-        private void AimWeaponBlade(Transform hand, Vector3 desiredBladeWorldDir, float weight)
+        /// <summary>
+        /// Drives upper-body & hand grip during Standing Idle, Forward Run (▶), and Backward Retreat (◀)
+        /// so the Hero ALWAYS grips the sword hilt cleanly, NEVER holds an invisible shield, and backs up in a defensive sword stance!
+        /// </summary>
+        private void ApplySwordLocomotionPose()
         {
-            if (hand == null || _weaponRoot == null || clashAnchor == null) return;
-            Vector3 curBladeDir = clashAnchor.position - _weaponRoot.position;
-            if (curBladeDir.sqrMagnitude < 1e-6f || desiredBladeWorldDir.sqrMagnitude < 1e-6f) return;
+            if (modelRoot == null || _rightUpperArm == null || _rightLowerArm == null || _rightHand == null) return;
 
-            Quaternion delta = Quaternion.FromToRotation(curBladeDir.normalized, desiredBladeWorldDir.normalized);
-            hand.rotation = Quaternion.Slerp(hand.rotation, delta * hand.rotation, weight);
+            Vector3 fwd = modelRoot.forward;
+            Vector3 up = modelRoot.up;
+            Vector3 right = modelRoot.right;
+
+            Vector3 rShoulder = _rightUpperArm.position;
+            float rArmLen = Vector3.Distance(rShoulder, _rightLowerArm.position) +
+                            Vector3.Distance(_rightLowerArm.position, _rightHand.position);
+            if (rArmLen < 0.05f) rArmLen = 0.55f;
+
+            bool isRetreating = _moveSpeed < -0.1f;
+            bool isAdvancing = _moveSpeed > 0.1f;
+
+            if (isRetreating)
+            {
+                // Retreating Backward (◀): Override forward-leaning sprint torso so Hero braces upright/back (-18° pitch cancellation)
+                // while holding the sword pointed defensively forward toward the Boss!
+                if (_spineBone != null)
+                    _spineBone.rotation = Quaternion.AngleAxis(-12f, right) * Quaternion.AngleAxis(10f, up) * _spineBone.rotation;
+                if (_chestBone != null)
+                    _chestBone.rotation = Quaternion.AngleAxis(-12f, right) * Quaternion.AngleAxis(10f, up) * _chestBone.rotation;
+            }
+
+            rShoulder = _rightUpperArm.position;
+            Vector3 targetRHand;
+            Vector3 desiredBladeDir;
+            Vector3 rPole = right * 0.78f - up * 0.68f - fwd * 0.20f;
+
+            if (isRetreating)
+            {
+                // Defensive mid-guard while stepping backward (forearm forward-down, blade angled forward-up toward Boss)
+                targetRHand = rShoulder + fwd * (0.58f * rArmLen) - up * (0.30f * rArmLen) + right * (0.08f * rArmLen);
+                desiredBladeDir = (fwd * 0.84f + up * 0.50f - right * 0.20f).normalized;
+            }
+            else if (isAdvancing)
+            {
+                // Aggressive low-ready carry while dashing forward
+                targetRHand = rShoulder + fwd * (0.44f * rArmLen) - up * (0.46f * rArmLen) + right * (0.22f * rArmLen);
+                desiredBladeDir = (fwd * 0.92f + up * 0.24f - right * 0.16f).normalized;
+            }
+            else
+            {
+                // Poised Joseon Chudan Ready Stance (중단 검세): right hand in front of waist, blade angled cleanly forward-up toward opponent!
+                targetRHand = rShoulder + fwd * (0.54f * rArmLen) - up * (0.38f * rArmLen) + right * (0.14f * rArmLen);
+                desiredBladeDir = (fwd * 0.88f + up * 0.42f - right * 0.20f).normalized;
+            }
+
+            SolveTwoBoneArmIK(_rightUpperArm, _rightLowerArm, _rightHand, targetRHand, rPole, 0.92f);
+            AimWeaponBlade(_rightHand, _rightLowerArm, desiredBladeDir, 1f);
+
+            // Tuck Left Arm naturally at waist/mapae (eliminates the raw Mixamo invisible-shield left arm pose in Idle & Run!)
+            if (_leftUpperArm != null && _leftLowerArm != null && _leftHand != null)
+            {
+                Vector3 lShoulder = _leftUpperArm.position;
+                float lArmLen = Vector3.Distance(lShoulder, _leftLowerArm.position) +
+                                Vector3.Distance(_leftLowerArm.position, _leftHand.position);
+                if (lArmLen < 0.05f) lArmLen = 0.55f;
+
+                Vector3 targetLHand = lShoulder + fwd * (0.22f * lArmLen) - up * (0.48f * lArmLen) - right * (0.12f * lArmLen);
+                Vector3 lPole = -right * 0.72f - up * 0.72f - fwd * 0.25f;
+                SolveTwoBoneArmIK(_leftUpperArm, _leftLowerArm, _leftHand, targetLHand, lPole, 0.88f);
+            }
+        }
+
+        private void AimWeaponBlade(Transform hand, Transform lowerArm, Vector3 desiredBladeWorldDir, float weight)
+        {
+            if (hand == null || desiredBladeWorldDir.sqrMagnitude < 1e-6f) return;
+            Vector3 bladeDir = desiredBladeWorldDir.normalized;
+
+            // 1. Orthonormal triad for Mixamo RightHand:
+            //    -hand.right (local -X, thumb-side grip tunnel) == bladeDir
+            //    hand.up     (local +Y, wrist -> knuckles)      == palmExtendDir (projection of forearmDir onto plane perp to bladeDir)
+            //    hand.forward(local +Z, palm face)              == Cross(palmExtendDir, bladeDir)
+            Vector3 forearmDir = lowerArm != null && (hand.position - lowerArm.position).sqrMagnitude > 1e-5f
+                ? (hand.position - lowerArm.position).normalized
+                : hand.up;
+            Vector3 palmExtendDir = Vector3.ProjectOnPlane(forearmDir, bladeDir);
+            if (palmExtendDir.sqrMagnitude < 1e-4f)
+            {
+                palmExtendDir = Vector3.ProjectOnPlane(modelRoot != null ? modelRoot.forward : Vector3.forward, bladeDir);
+            }
+            palmExtendDir.Normalize();
+
+            Vector3 palmFaceNormal = Vector3.Cross(palmExtendDir, bladeDir).normalized;
+            if (palmFaceNormal.sqrMagnitude > 1e-4f)
+            {
+                Quaternion targetHandRot = Quaternion.LookRotation(palmFaceNormal, palmExtendDir);
+                hand.rotation = Quaternion.Slerp(hand.rotation, targetHandRot, weight);
+            }
+
+            // 2. Fine-align actual 3D sword blade vector (weaponRoot -> BladeTip) with bladeDir
+            Vector3 curBladeDir = (_weaponRoot != null && clashAnchor != null)
+                ? (clashAnchor.position - _weaponRoot.position)
+                : -hand.right;
+            if (curBladeDir.sqrMagnitude < 1e-6f) return;
+
+            Quaternion fineDelta = Quaternion.FromToRotation(curBladeDir.normalized, bladeDir);
+            hand.rotation = Quaternion.Slerp(hand.rotation, fineDelta * hand.rotation, weight);
+        }
+
+        private static void AimHandToHilt(Transform hand, Transform lowerArm, Vector3 desiredBladeWorldDir, float weight)
+        {
+            if (hand == null || desiredBladeWorldDir.sqrMagnitude < 1e-6f) return;
+            Vector3 bladeDir = desiredBladeWorldDir.normalized;
+            Vector3 forearmDir = lowerArm != null && (hand.position - lowerArm.position).sqrMagnitude > 1e-5f
+                ? (hand.position - lowerArm.position).normalized
+                : hand.up;
+            Vector3 palmExtendDir = Vector3.ProjectOnPlane(forearmDir, bladeDir);
+            if (palmExtendDir.sqrMagnitude < 1e-4f)
+            {
+                palmExtendDir = Vector3.Cross(bladeDir, Vector3.up);
+            }
+            palmExtendDir.Normalize();
+
+            // For LeftHand, local +X (hand.right) is thumb side (+bladeDir), so palmFaceNormal = Cross(bladeDir, palmExtendDir)
+            Vector3 palmFaceNormal = Vector3.Cross(bladeDir, palmExtendDir).normalized;
+            if (palmFaceNormal.sqrMagnitude > 1e-4f)
+            {
+                Quaternion targetRot = Quaternion.LookRotation(palmFaceNormal, palmExtendDir);
+                hand.rotation = Quaternion.Slerp(hand.rotation, targetRot, weight);
+            }
         }
 
         private void UpdateHumanoidLocomotion(float dt)
@@ -1029,8 +1239,13 @@ namespace EosaBlade
 
             if (_pose == WeaponPose.Idle || _pose == WeaponPose.Guard)
             {
-                int desired = _moveSpeed > 0.1f ? HashRun : (_pose == WeaponPose.Guard ? HashBlockIdle : HashIdle);
-                humanoidAnimator.speed = _moveSpeed > 0.1f ? (_pose == WeaponPose.Guard ? 0.85f : 1.15f) : 1f;
+                float absSpd = Mathf.Abs(_moveSpeed);
+                int desired;
+                if (_moveSpeed < -0.1f) desired = HashRunBack;
+                else if (_moveSpeed > 0.1f) desired = HashRun;
+                else desired = (_pose == WeaponPose.Guard ? HashBlockIdle : HashIdle);
+
+                humanoidAnimator.speed = absSpd > 0.1f ? (_pose == WeaponPose.Guard ? 0.85f : 1.10f) : 1f;
                 PlayAnim(desired, 0.08f, forceRestart: false);
             }
         }
@@ -1133,19 +1348,36 @@ namespace EosaBlade
         private void UpdateColorFlash(float dt)
         {
             Color bodyCol = baseBodyColor;
-            Color bodyEmit = Color.black;
+            // Permanent subtle moonlit character sheen so dark Joseon robes & armor pop cleanly against the night courtyard!
+            Color bodyEmit = _facingSign > 0f
+                ? new Color(0.08f, 0.11f, 0.17f, 1f)
+                : new Color(0.12f, 0.08f, 0.07f, 1f);
             Color weaponCol = baseWeaponColor;
-            Color weaponEmit = Color.black;
+            // Subtle metallic sheen so the actual 3D steel blade, wrapped hilt, and golden tsuba detail stay crisp (not solid orange/white!)
+            Color weaponEmit = _facingSign > 0f
+                ? new Color(0.14f, 0.20f, 0.30f, 1f)
+                : new Color(0.20f, 0.11f, 0.06f, 1f);
+
+            if (_pose == WeaponPose.SlashSwing || _pose == WeaponPose.SpinSlash || _pose == WeaponPose.ThrustExtend || _pose == WeaponPose.ExecutionFinish)
+            {
+                weaponEmit += _facingSign > 0f
+                    ? new Color(0.22f, 0.30f, 0.45f, 1f)
+                    : new Color(0.32f, 0.15f, 0.06f, 1f);
+            }
+            else if (_pose == WeaponPose.ParryFlash || _pose == WeaponPose.GanpaDeflect || _pose == WeaponPose.Guard)
+            {
+                weaponEmit += new Color(0.24f, 0.20f, 0.08f, 1f);
+            }
 
             if (_perilousGlow)
             {
-                float pulse = 0.55f + 0.45f * Mathf.Sin(Time.time * 24f);
-                weaponEmit = new Color(1.6f, 0.14f, 0.14f, 1f) * pulse;
+                float pulse = 0.55f + 0.45f * Mathf.Sin(Time.time * 26f);
+                weaponEmit = new Color(1.85f, 0.18f, 0.14f, 1f) * pulse;
             }
             else if (_staggerPulse)
             {
-                float pulse = 0.35f + 0.65f * Mathf.Sin(Time.time * 10f);
-                bodyEmit = new Color(0.55f, 0.08f, 0.06f, 1f) * pulse;
+                float pulse = 0.35f + 0.65f * Mathf.Sin(Time.time * 12f);
+                bodyEmit += new Color(0.60f, 0.10f, 0.08f, 1f) * pulse;
             }
 
             if (_flashTimer > 0f)
@@ -1154,8 +1386,8 @@ namespace EosaBlade
                 float t = Mathf.Clamp01(_flashTimer * 6f);
                 if (!isTexturedModel)
                     bodyCol = Color.Lerp(bodyCol, _flashColor, t * 0.65f);
-                bodyEmit += _flashColor * (t * 0.65f);
-                weaponEmit += _flashColor * (t * 1.15f);
+                bodyEmit += _flashColor * (t * 0.70f);
+                weaponEmit += _flashColor * (t * 1.40f);
             }
 
             ApplyColors(bodyCol, bodyEmit, weaponCol, weaponEmit);

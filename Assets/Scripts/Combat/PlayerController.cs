@@ -25,21 +25,21 @@ namespace EosaBlade
     public class PlayerController : MonoBehaviour
     {
         [Header("Movement (X-Axis Only)")]
-        [SerializeField] private float moveSpeed = 5.6f;
+        [SerializeField] private float moveSpeed = 5.8f;
         [SerializeField] private float arenaHalfWidth = 6.2f;
-        [SerializeField] private float minBossSeparation = 1.22f;
+        [SerializeField] private float minBossSeparation = 1.55f;
 
         [Header("Parry & Guard Tuning (60fps Mobile)")]
-        [SerializeField] private float parryWindow = 0.18f;
-        [SerializeField] private float spamParryWindow = 0.08f;
-        [SerializeField] private float spamPenaltyThreshold = 0.50f;
-        [SerializeField] private float guardBreakDuration = 0.80f;
+        [SerializeField] private float parryWindow = 0.20f;
+        [SerializeField] private float spamParryWindow = 0.09f;
+        [SerializeField] private float spamPenaltyThreshold = 0.45f;
+        [SerializeField] private float guardBreakDuration = 0.75f;
 
         [Header("Attack & Special Tuning")]
-        [SerializeField] private float attackRange = 2.45f;
-        [SerializeField] private float executionRange = 3.60f;
-        [SerializeField] private float ganpaRange = 3.80f;
-        [SerializeField] private float heavyHoldThreshold = 0.30f;
+        [SerializeField] private float attackRange = 2.65f;
+        [SerializeField] private float executionRange = 3.80f;
+        [SerializeField] private float ganpaRange = 4.00f;
+        [SerializeField] private float heavyHoldThreshold = 0.28f;
         [SerializeField] private float specialCooldown = 1.15f;
 
         [Header("Dodge / Leap Tuning")]
@@ -104,9 +104,12 @@ namespace EosaBlade
         private float _nextSpecialTime = -10f;
         private float _ganpaActiveUntil = -10f;
         private float _parryFlashTimer;
+        private float _counterSlashReadyUntil = -10f;
         private float _attackFollowThroughTimer;
         private float _attackHopDuration;
         private float _attackHopElapsed;
+        private int _multiHitRemaining;
+        private float _nextMultiHitDelay;
 
         // Smooth physical lunge/step velocity (eliminates 1-frame teleportation!)
         private float _lungeVelocity;
@@ -142,9 +145,12 @@ namespace EosaBlade
             _nextSpecialTime = -10f;
             _ganpaActiveUntil = -10f;
             _parryFlashTimer = 0f;
+            _counterSlashReadyUntil = -10f;
             _attackFollowThroughTimer = 0f;
             _attackHopDuration = 0f;
             _attackHopElapsed = 0f;
+            _multiHitRemaining = 0;
+            _nextMultiHitDelay = 0f;
             _lungeRemaining = 0f;
             _lungeVelocity = 0f;
 
@@ -321,12 +327,22 @@ namespace EosaBlade
                         _attackHitFired = true;
                         ResolvePlayerStrike();
                     }
+                    if (_multiHitRemaining > 0)
+                    {
+                        _nextMultiHitDelay -= dt;
+                        if (_nextMultiHitDelay <= 0f)
+                        {
+                            _multiHitRemaining--;
+                            _nextMultiHitDelay = 0.08f;
+                            ResolvePlayerStrike();
+                        }
+                    }
                     if (_stateTimer <= 0f)
                     {
                         State = PlayerState.AttackRecovery;
-                        _stateTimer = _currentAttackKind == AttackKind.PlayerHeavy ? 0.24f : 0.16f;
+                        _stateTimer = _currentAttackKind == AttackKind.PlayerHeavy ? 0.18f : 0.11f;
                         // Allow the full dynamic sword follow-through animation to finish smoothly after recovery!
-                        _attackFollowThroughTimer = 0.22f;
+                        _attackFollowThroughTimer = 0.20f;
                     }
                     break;
 
@@ -345,6 +361,21 @@ namespace EosaBlade
                     {
                         _attackHitFired = true;
                         ResolvePlayerStrike();
+                    }
+                    if (_multiHitRemaining > 0)
+                    {
+                        _nextMultiHitDelay -= dt;
+                        if (_nextMultiHitDelay <= 0f)
+                        {
+                            _multiHitRemaining--;
+                            _nextMultiHitDelay = 0.075f;
+                            if (visual != null)
+                            {
+                                visual.SetAttackComboVariant(4 - _multiHitRemaining);
+                                visual.SetPose(_multiHitRemaining == 0 ? WeaponPose.ExecutionFinish : WeaponPose.SpinSlash);
+                            }
+                            ResolvePlayerStrike();
+                        }
                     }
                     if (_stateTimer <= 0f)
                     {
@@ -367,7 +398,7 @@ namespace EosaBlade
 
                 case PlayerState.GuardBroken:
                     _stateTimer -= dt;
-                    if (visual != null) visual.SetPose(WeaponPose.Staggered);
+                    if (visual != null) visual.SetPose(WeaponPose.StanceBrokenKneel);
                     if (_stateTimer <= 0f)
                     {
                         Stats.SetPosture(Stats.MaxPosture * 0.42f);
@@ -377,6 +408,7 @@ namespace EosaBlade
 
                 case PlayerState.HitFlinch:
                     _stateTimer -= dt;
+                    if (visual != null) visual.SetPose(WeaponPose.Staggered);
                     if (_stateTimer <= 0f)
                     {
                         State = PlayerState.Idle;
@@ -433,10 +465,11 @@ namespace EosaBlade
         private void HandleMovement(float dt)
         {
             float axis = GetMoveAxis();
-            if (visual != null) visual.SetMoveSpeed(Mathf.Abs(axis));
+            // Pass signed movement relative to FacingSign (+1 = advancing forward, -1 = retreating backward!)
+            if (visual != null) visual.SetMoveSpeed(axis * FacingSign);
             if (Mathf.Abs(axis) < 0.01f) return;
 
-            float speed = _parryHeld ? moveSpeed * 0.55f : moveSpeed;
+            float speed = _parryHeld ? moveSpeed * 0.55f : (axis * FacingSign < 0f ? moveSpeed * 0.85f : moveSpeed);
             MoveX(axis * speed * dt, allowPassThrough: false);
         }
 
@@ -517,29 +550,48 @@ namespace EosaBlade
 
         private void StartLightAttack()
         {
+            bool isCounterFlash = Time.time <= _counterSlashReadyUntil;
+            _counterSlashReadyUntil = -10f;
+
             if (Time.time > _comboResetTime) _comboStep = 0;
-            _comboStep = (_comboStep % 3) + 1;
-            _comboResetTime = Time.time + 0.95f;
+            _comboStep = isCounterFlash ? 4 : (_comboStep % 4) + 1;
+            _comboResetTime = Time.time + 1.05f;
 
             _currentAttackKind = AttackKind.PlayerLight;
             State = PlayerState.AttackWindup;
-            // Fast 0.09s-0.12s blade snap so the sword physically buries into the Boss right when the button is tapped!
-            _attackHitDelay = _comboStep == 3 ? 0.13f : 0.09f;
-            _stateTimer = _comboStep == 3 ? 0.30f : 0.22f;
+            // Blazing 4-hit hack-and-slash rhythm: 1타(신속베기) -> 2타(치켜베기) -> 3타(회전 2연참!) -> 4타(어사 일섬 검기 폭발!)
+            _attackHitDelay = _comboStep == 4 ? 0.10f : 0.07f;
+            _stateTimer = _comboStep == 4 ? 0.26f : (_comboStep == 3 ? 0.24f : 0.18f);
             _attackHitFired = false;
+            _multiHitRemaining = _comboStep == 3 ? 1 : 0;
+            _nextMultiHitDelay = 0.14f;
 
-            // Aggressive close-in lunge right up to 1.22m so the blade cuts deep into the Boss's torso!
+            // Controlled forward step on light attack (preserves 2.5D footsies & spacing; no 3.2m across-screen teleport!)
             float room = Mathf.Max(0f, DistanceToBoss() - minBossSeparation);
-            if (room > 0.02f) StartSmoothLunge(FacingSign * Mathf.Min(_comboStep == 3 ? 1.15f : 0.85f, room), 0.09f);
-            if (_comboStep == 3) StartAttackHop(0.26f);
+            if (room > 0.02f)
+            {
+                float maxStep = isCounterFlash ? 1.35f : (_comboStep == 4 ? 1.10f : 0.85f);
+                StartSmoothLunge(FacingSign * Mathf.Min(maxStep, room), 0.08f);
+            }
+            if (_comboStep >= 3) StartAttackHop(_comboStep == 4 ? 0.26f : 0.18f);
 
-            _juice?.TriggerSlashSwing(heavy: _comboStep == 3);
+            _juice?.TriggerSlashSwing(heavy: _comboStep >= 3);
             if (visual != null)
             {
-                visual.SetAttackComboVariant(_comboStep);
-                if (_comboStep == 2) visual.SetPose(WeaponPose.SpinSlash);
-                else if (_comboStep == 3) visual.SetPose(WeaponPose.ExecutionFinish);
+                visual.SetAttackComboVariant(Mathf.Min(_comboStep, 3));
+                if (_comboStep == 2) visual.SetPose(WeaponPose.SlashSwing);
+                else if (_comboStep == 3) visual.SetPose(WeaponPose.SpinSlash);
+                else if (_comboStep == 4)
+                {
+                    visual.SetPose(WeaponPose.ExecutionFinish);
+                    visual.TriggerFlash(isCounterFlash ? new Color(1.0f, 0.80f, 0.15f, 1f) : new Color(1.0f, 0.35f, 0.18f, 1f), 0.24f);
+                }
                 else visual.SetPose(WeaponPose.SlashSwing);
+            }
+
+            if (isCounterFlash)
+            {
+                OnCombatFeedback?.Invoke("역습 일섬!", new Color(1.0f, 0.84f, 0.16f, 1f));
             }
         }
 
@@ -547,37 +599,46 @@ namespace EosaBlade
         {
             _currentAttackKind = AttackKind.PlayerHeavy;
             State = PlayerState.AttackWindup;
-            _attackHitDelay = 0.14f;
-            _stateTimer = 0.34f;
+            _attackHitDelay = 0.11f;
+            _stateTimer = 0.28f;
             _attackHitFired = false;
+            _multiHitRemaining = 0;
 
             float room = Mathf.Max(0f, DistanceToBoss() - minBossSeparation);
-            if (room > 0.02f) StartSmoothLunge(FacingSign * Mathf.Min(1.25f, room), 0.11f);
+            if (room > 0.02f) StartSmoothLunge(FacingSign * Mathf.Min(1.35f, room), 0.10f);
 
             _juice?.TriggerSlashSwing(heavy: true);
-            if (visual != null) visual.SetPose(WeaponPose.ThrustExtend);
+            if (visual != null)
+            {
+                visual.SetPose(WeaponPose.ThrustExtend);
+                visual.TriggerFlash(new Color(1.0f, 0.65f, 0.20f, 1f), 0.20f);
+            }
         }
 
         private void StartMapaeStrike()
         {
+            // 어사 비검: 마패 검풍 (3-Hit High-Speed Golden Storm Slash Skill!)
             _nextSpecialTime = Time.time + specialCooldown;
             _currentAttackKind = AttackKind.PlayerMapae;
             State = PlayerState.SpecialMapae;
-            _attackHitDelay = 0.15f;
-            _stateTimer = 0.34f;
+            _attackHitDelay = 0.06f;
+            _stateTimer = 0.30f;
             _attackHitFired = false;
-            _ganpaActiveUntil = Time.time + 0.24f;
+            _multiHitRemaining = 2; // 3 rapid hits total (0.06s, 0.135s, 0.21s)!
+            _nextMultiHitDelay = 0.135f;
+            _ganpaActiveUntil = Time.time + 0.26f;
 
             float room = Mathf.Max(0f, DistanceToBoss() - minBossSeparation);
-            if (room > 0.05f) StartSmoothLunge(FacingSign * Mathf.Min(0.45f, room), 0.13f);
+            if (room > 0.02f) StartSmoothLunge(FacingSign * Mathf.Min(1.25f, room), 0.09f);
+            StartAttackHop(0.24f);
 
             _juice?.TriggerSlashSwing(heavy: true);
             if (visual != null)
             {
                 visual.SetPose(WeaponPose.GanpaDeflect);
-                if (IsMapaeEmpowered)
-                    visual.TriggerFlash(new Color(0.95f, 0.72f, 0.02f, 1f), 0.22f);
+                visual.TriggerFlash(new Color(1.0f, 0.78f, 0.08f, 1f), 0.28f);
             }
+            OnCombatFeedback?.Invoke(IsMapaeEmpowered ? "진(眞) 어사비검: 천벌 3연참!" : "어사비검: 마패 3연참!", new Color(1.0f, 0.80f, 0.12f, 1f));
         }
 
         private void StartDodge()
@@ -658,15 +719,18 @@ namespace EosaBlade
 
             float hpDmg;
             float postureDmg;
+            bool empoweredMapaeFinisher = false;
 
             if (_currentAttackKind == AttackKind.PlayerMapae)
             {
                 bool empowered = IsMapaeEmpowered;
-                IsMapaeEmpowered = false;
-                hpDmg = empowered ? 18f : 10f;
-                postureDmg = empowered ? 36f : 22f;
-                if (empowered)
-                    OnCombatFeedback?.Invoke("강화 마패 일격!", new Color(0.95f, 0.75f, 0.08f, 1f));
+                if (_multiHitRemaining == 0)
+                {
+                    empoweredMapaeFinisher = empowered;
+                    IsMapaeEmpowered = false;
+                }
+                hpDmg = empowered ? 10f : 6f;
+                postureDmg = empowered ? 16f : 10f;
             }
             else if (_currentAttackKind == AttackKind.PlayerHeavy)
             {
@@ -675,31 +739,34 @@ namespace EosaBlade
             }
             else
             {
-                hpDmg = _comboStep == 3 ? 22f : 15f;
-                postureDmg = _comboStep == 3 ? 16f : 10f;
+                hpDmg = _comboStep == 4 ? 24f : (_comboStep == 3 ? 11f : 14f);
+                postureDmg = _comboStep == 4 ? 22f : (_comboStep == 3 ? 10f : 12f);
             }
 
-            // Spawn hit sparks & ring directly where the Hero's blade is buried inside the Boss's chest!
-            Vector3 impactPos = _boss.transform.position - Vector3.right * (FacingSign * 0.22f) + Vector3.up * 1.28f;
+            // Spawn hit sparks & ring right in the visible blade-clash gap in front of the Boss's chest!
+            Vector3 impactPos = _boss.transform.position - Vector3.right * (FacingSign * 0.45f) + Vector3.up * 1.32f;
             if (visual != null)
             {
                 Vector3 bladePos = visual.GetBladeMidpoint();
-                impactPos.x = Mathf.Lerp(bladePos.x, _boss.transform.position.x - FacingSign * 0.18f, 0.65f);
-                impactPos.y = Mathf.Clamp(bladePos.y, 1.15f, 1.55f);
+                impactPos.x = Mathf.Lerp(bladePos.x, _boss.transform.position.x - FacingSign * 0.38f, 0.55f);
+                impactPos.y = Mathf.Clamp(bladePos.y, 1.18f, 1.55f);
             }
-            bool isHeavyHit = _currentAttackKind != AttackKind.PlayerLight || _comboStep == 3;
+            // Only Heavy Thrust, 4th Combo Finisher, or the final hit of Empowered Mapae counts as a heavy hit!
+            bool isHeavyHit = _currentAttackKind == AttackKind.PlayerHeavy ||
+                              (_currentAttackKind == AttackKind.PlayerLight && _comboStep >= 4) ||
+                              empoweredMapaeFinisher;
             bool wasDeflected = _boss.ReceivePlayerHit(hpDmg, postureDmg, _currentAttackKind, impactPos, isHeavyHit);
             if (wasDeflected)
             {
-                OnCombatFeedback?.Invoke("적 방어! 반격 대비", new Color(0.86f, 0.88f, 0.94f, 1f));
+                OnCombatFeedback?.Invoke("캉! 적 튕겨내기! 패링 대비!", new Color(1.0f, 0.82f, 0.22f, 1f));
             }
             else if (_currentAttackKind == AttackKind.PlayerHeavy)
             {
-                OnCombatFeedback?.Invoke("강격!", new Color(0.96f, 0.72f, 0.22f, 1f));
+                OnCombatFeedback?.Invoke("강격 일섬!", new Color(1.0f, 0.72f, 0.22f, 1f));
             }
-            else if (_currentAttackKind == AttackKind.PlayerLight && _comboStep == 3)
+            else if (_currentAttackKind == AttackKind.PlayerLight && _comboStep == 4)
             {
-                OnCombatFeedback?.Invoke("3연격!", new Color(0.94f, 0.86f, 0.62f, 1f));
+                OnCombatFeedback?.Invoke("4단 어사 일섬!", new Color(1.0f, 0.78f, 0.18f, 1f));
             }
         }
 
@@ -741,7 +808,8 @@ namespace EosaBlade
                 // Rule: Perfect Parry NEVER breaks guard even if posture is at 99%
                 Stats.AddPosture(strike.ParrySelfPostureDamage, canBreak: false);
                 _parryFlashTimer = 0.30f;
-                // Keep blades locked in contact during hitstop, with a tight 0.14m physical clash skid!
+                // Unlock Counter-Flash Slash (역습 일섬!) for the next 0.85s after any Perfect Parry!
+                _counterSlashReadyUntil = Time.time + 0.85f;
                 StartSmoothLunge(-FacingSign * 0.14f, 0.12f);
 
                 if (visual != null)
@@ -754,9 +822,9 @@ namespace EosaBlade
                 Vector3 bladeClashPos = visual != null ? visual.GetBladeMidpoint() : clashPoint;
                 _juice?.TriggerPerfectParry(bladeClashPos, ConsecutiveParries);
 
-                staggerBoss = (strike.Kind == AttackKind.DelayedHeavySlam);
+                staggerBoss = (strike.Kind == AttackKind.DelayedHeavySlam || strike.StaggerBossOnParry);
                 OnCombatFeedback?.Invoke(
-                    ConsecutiveParries >= 3 ? $"튕겨내기! x{ConsecutiveParries}" : "튕겨내기!",
+                    staggerBoss ? "튕겨내기! 빈틈!" : (ConsecutiveParries >= 3 ? $"튕겨내기! x{ConsecutiveParries}" : "튕겨내기!"),
                     new Color(0.96f, 0.74f, 0.05f, 1f));
 
                 return DefenseOutcome.PerfectParry;
@@ -805,18 +873,21 @@ namespace EosaBlade
             }
 
             State = PlayerState.HitFlinch;
-            _stateTimer = 0.22f;
-            StartSmoothLunge(-FacingSign * 0.45f, 0.14f);
+            _stateTimer = 0.28f;
+            StartSmoothLunge(-FacingSign * 0.48f, 0.14f);
             _juice?.TriggerNormalHit(clashPoint);
             if (visual != null)
             {
-                visual.TriggerFlash(new Color(0.90f, 0.15f, 0.15f, 1f), 0.20f);
+                visual.SetPose(WeaponPose.Staggered);
+                visual.TriggerFlash(new Color(0.95f, 0.16f, 0.16f, 1f), 0.24f);
             }
 
             if (strike.Kind == AttackKind.GroundShockwave)
                 OnCombatFeedback?.Invoke("바닥 충격파! 회피/도약", new Color(0.92f, 0.18f, 0.18f, 1f));
             else if (strike.IsPerilous)
                 OnCombatFeedback?.Invoke("가드 불가! 간파/회피", new Color(0.92f, 0.18f, 0.18f, 1f));
+            else
+                OnCombatFeedback?.Invoke("피격! 자세 무너짐!", new Color(0.92f, 0.22f, 0.18f, 1f));
 
             return DefenseOutcome.Hit;
         }
@@ -831,7 +902,7 @@ namespace EosaBlade
             _juice?.TriggerGuardBreak(clashPoint);
             if (visual != null)
             {
-                visual.SetPose(WeaponPose.Staggered);
+                visual.SetPose(WeaponPose.StanceBrokenKneel);
                 visual.TriggerFlash(new Color(0.92f, 0.20f, 0.12f, 1f), 0.35f);
             }
             OnCombatFeedback?.Invoke("가드 붕괴!", new Color(0.92f, 0.22f, 0.16f, 1f));

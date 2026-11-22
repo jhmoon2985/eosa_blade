@@ -12,9 +12,9 @@ namespace EosaBlade
         [SerializeField] private CombatJuiceController juice;
         [SerializeField] private CombatHUD hud;
 
-        [SerializeField] private Vector3 playerSpawn = new Vector3(-2.0f, 0f, 0f);
-        [SerializeField] private Vector3 bossSpawn = new Vector3(2.0f, 0f, 0f);
-        [SerializeField] private float hardMinSeparation = 1.20f;
+        [SerializeField] private Vector3 playerSpawn = new Vector3(-2.1f, 0f, 0f);
+        [SerializeField] private Vector3 bossSpawn = new Vector3(2.1f, 0f, 0f);
+        [SerializeField] private float hardMinSeparation = 1.52f;
         [SerializeField] private float arenaHalfWidth = 6.2f;
 
         public bool IsDuelActive { get; private set; }

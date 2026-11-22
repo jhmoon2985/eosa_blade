@@ -2,11 +2,33 @@
 using System.IO;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Android;
 using UnityEditor.Build.Reporting;
 using UnityEngine;
 
 namespace EosaBlade.Editor
 {
+    /// <summary>
+    /// Patches generated AndroidManifest.xml from userLandscape -> sensorLandscape so rotating the phone
+    /// 180 degrees between Landscape Left and Reverse Landscape Right ALWAYS works even if system Auto-Rotate is off.
+    /// </summary>
+    public class SensorLandscapeManifestPostProcessor : IPostGenerateGradleAndroidProject
+    {
+        public int callbackOrder => 100;
+
+        public void OnPostGenerateGradleAndroidProject(string basePath)
+        {
+            string manifestPath = Path.Combine(basePath, "src", "main", "AndroidManifest.xml");
+            if (!File.Exists(manifestPath)) return;
+            string xml = File.ReadAllText(manifestPath);
+            if (xml.Contains("android:screenOrientation=\"userLandscape\""))
+            {
+                xml = xml.Replace("android:screenOrientation=\"userLandscape\"", "android:screenOrientation=\"sensorLandscape\"");
+                File.WriteAllText(manifestPath, xml);
+                Debug.Log("[EosaBlade] Patched AndroidManifest.xml -> android:screenOrientation=\"sensorLandscape\"");
+            }
+        }
+    }
     /// 경량 APK 빌드: Builds/eosa_blade_v<버전>_lite.apk, 이전 APK는 삭제.
     /// 배치 실행: Unity -batchmode -quit -projectPath . -buildTarget Android -executeMethod EosaBlade.Editor.BuildScript.AndroidLite
     public static class BuildScript

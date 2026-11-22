@@ -34,6 +34,7 @@ namespace EosaBlade
         public float ParrySelfPostureDamage;
         public float HitPostureDamage;
         public bool IsPerilous;
+        public bool StaggerBossOnParry;
     }
 
     /// <summary>

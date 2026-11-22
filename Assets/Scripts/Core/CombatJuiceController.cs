@@ -14,10 +14,10 @@ namespace EosaBlade
         [SerializeField] private Transform playerTransform;
         [SerializeField] private Transform bossTransform;
         [SerializeField] private Transform backdropTransform;
-        [SerializeField] private Vector3 baseCameraOffset = new Vector3(0f, 1.95f, -7.8f);
-        [SerializeField] private Vector3 lookOffset = new Vector3(0f, 1.15f, 0f);
-        [SerializeField] private float baseFov = 36f;
-        [SerializeField] private float cameraFollowSmooth = 7f;
+        [SerializeField] private Vector3 baseCameraOffset = new Vector3(0f, 1.56f, -6.10f);
+        [SerializeField] private Vector3 lookOffset = new Vector3(0f, 1.12f, 0f);
+        [SerializeField] private float baseFov = 35f;
+        [SerializeField] private float cameraFollowSmooth = 11f;
 
         [Header("VFX Materials (Pre-baked URP Particle Assets)")]
         [SerializeField] private Material sparkParticleMaterial;
@@ -43,6 +43,9 @@ namespace EosaBlade
         private float _shakeSeed;
         private float _zoomPunch;      // positive zooms FOV in
         private float _targetZoomHold; // sustained zoom during execution
+        private float _zPushIn;        // dramatic forward camera cut-in on parry/combo finisher/skill
+        private float _cameraRoll;     // dynamic Dutch tilt angle on heavy clash/finisher
+        private float _rollFlipSign = 1f;
         private Vector3 _smoothedFocus;
         private bool _cameraInitialized;
 
@@ -103,6 +106,15 @@ namespace EosaBlade
             InitAudioPool();
             InitParticlePools();
             InitAndroidHaptics();
+            PerformanceBootstrap.ForceAndroidSensorLandscape();
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            if (hasFocus)
+            {
+                PerformanceBootstrap.ForceAndroidSensorLandscape();
+            }
         }
 
         private void OnDisable()
@@ -120,6 +132,8 @@ namespace EosaBlade
             _shakeTrauma = 0f;
             _zoomPunch = 0f;
             _targetZoomHold = 0f;
+            _zPushIn = 0f;
+            _cameraRoll = 0f;
             _cameraInitialized = false;
         }
 
@@ -153,7 +167,7 @@ namespace EosaBlade
 
             Vector3 mid = (playerTransform.position + bossTransform.position) * 0.5f;
             float dist = Mathf.Abs(playerTransform.position.x - bossTransform.position.x);
-            float dynamicZ = baseCameraOffset.z - Mathf.Clamp((dist - 3.6f) * 0.45f, 0f, 2.2f);
+            float dynamicZ = baseCameraOffset.z - Mathf.Clamp((dist - 2.2f) * 0.42f, 0f, 1.8f) + _zPushIn;
             Vector3 desiredFocus = new Vector3(Mathf.Clamp(mid.x, -4.2f, 4.2f), 0f, 0f);
 
             if (!_cameraInitialized)
@@ -166,20 +180,26 @@ namespace EosaBlade
                 _smoothedFocus = Vector3.Lerp(_smoothedFocus, desiredFocus, 1f - Mathf.Exp(-cameraFollowSmooth * dt));
             }
 
-            // Decay shake & zoom punch
-            _shakeTrauma = Mathf.Max(0f, _shakeTrauma - dt * 2.8f);
-            _zoomPunch = Mathf.Lerp(_zoomPunch, _targetZoomHold, 1f - Mathf.Exp(-12f * dt));
+            // Decay shake, zoom punch, Z cut-in, and dynamic camera roll
+            _shakeTrauma = Mathf.Max(0f, _shakeTrauma - dt * 3.0f);
+            _zoomPunch = Mathf.Lerp(_zoomPunch, _targetZoomHold, 1f - Mathf.Exp(-14f * dt));
+            _zPushIn = Mathf.Lerp(_zPushIn, 0f, 1f - Mathf.Exp(-11f * dt));
+            _cameraRoll = Mathf.Lerp(_cameraRoll, 0f, 1f - Mathf.Exp(-14f * dt));
 
             float shakeMag = _shakeTrauma * _shakeTrauma;
-            float t = Time.unscaledTime * 38f;
-            float sx = (Mathf.PerlinNoise(_shakeSeed, t) - 0.5f) * 0.55f * shakeMag;
-            float sy = (Mathf.PerlinNoise(_shakeSeed + 17.3f, t) - 0.5f) * 0.42f * shakeMag;
+            float t = Time.unscaledTime * 42f;
+            float sx = (Mathf.PerlinNoise(_shakeSeed, t) - 0.5f) * 0.48f * shakeMag;
+            float sy = (Mathf.PerlinNoise(_shakeSeed + 17.3f, t) - 0.5f) * 0.38f * shakeMag;
 
             Vector3 camPos = _smoothedFocus + new Vector3(baseCameraOffset.x + sx, baseCameraOffset.y + sy, dynamicZ);
             targetCamera.transform.position = camPos;
             targetCamera.transform.LookAt(_smoothedFocus + lookOffset);
+            if (Mathf.Abs(_cameraRoll) > 0.01f)
+            {
+                targetCamera.transform.rotation = targetCamera.transform.rotation * Quaternion.Euler(0f, 0f, _cameraRoll);
+            }
 
-            targetCamera.fieldOfView = Mathf.Clamp(baseFov - _zoomPunch, 24f, 44f);
+            targetCamera.fieldOfView = Mathf.Clamp(baseFov - _zoomPunch, 22f, 40f);
 
             // Subtle parallax tracking on backdrop so 20:9 / 21:9 ultrawide phones NEVER show black side gaps
             if (backdropTransform != null)
@@ -202,43 +222,67 @@ namespace EosaBlade
             TriggerHaptic(14, 110);
         }
 
+        public void TriggerBladeGlint(Vector3 worldPos, bool perilous = false)
+        {
+            // Sharp visual + audio blade glint warning right before Boss swings!
+            Color glintCol = perilous ? new Color(1.0f, 0.22f, 0.16f, 1.0f) : new Color(1.0f, 0.92f, 0.42f, 1.0f);
+            EmitClashRing(worldPos, glintCol, 0.85f);
+            EmitParticles(_goldParryParticles, worldPos, 10);
+            PlayRandomClip(slashClips, 0.55f, 1.42f);
+        }
+
         public void TriggerPlayerSwordHit(Vector3 worldPos, bool heavy)
         {
             // Meaty blade-bite hitstop while the Hero's sword is physically buried inside the Boss's torso!
-            StartHitstop(heavy ? 0.088f : 0.062f, 0.02f);
-            AddShake(heavy ? 0.52f : 0.36f);
-            _zoomPunch = Mathf.Max(_zoomPunch, baseFov * (heavy ? 0.045f : 0.024f));
+            StartHitstop(heavy ? 0.088f : 0.060f, 0.02f);
+            AddShake(heavy ? 0.58f : 0.38f);
+            _zoomPunch = Mathf.Max(_zoomPunch, baseFov * (heavy ? 0.065f : 0.030f));
+            _zPushIn = Mathf.Max(_zPushIn, heavy ? 0.42f : 0.20f);
+            if (heavy)
+            {
+                _rollFlipSign = -_rollFlipSign;
+                _cameraRoll = _rollFlipSign * 2.8f;
+            }
             // Layered crisp blade cut + body/armor impact for unmistakable hitting satisfaction
             PlayOneShot(hitClip, heavy ? 1.0f : 0.92f, heavy ? 0.86f : Random.Range(0.96f, 1.06f));
             PlayRandomClip(slashClips, heavy ? 0.90f : 0.72f, heavy ? 0.88f : 1.12f);
-            EmitParticles(_crimsonImpactParticles, worldPos, heavy ? 30 : 20);
-            EmitParticles(_goldParryParticles, worldPos, heavy ? 12 : 6);
-            EmitClashRing(worldPos, heavy ? new Color(1.0f, 0.58f, 0.14f, 0.95f) : new Color(0.98f, 0.82f, 0.68f, 0.85f), heavy ? 1.35f : 0.95f);
-            TriggerHaptic(heavy ? 32 : 20, heavy ? 210 : 145);
+            EmitParticles(_crimsonImpactParticles, worldPos, heavy ? 34 : 22);
+            EmitParticles(_goldParryParticles, worldPos, heavy ? 16 : 8);
+            EmitClashRing(worldPos, heavy ? new Color(1.0f, 0.58f, 0.14f, 0.98f) : new Color(0.98f, 0.86f, 0.72f, 0.90f), heavy ? 1.55f : 1.05f);
+            if (heavy) EmitClashRing(worldPos, new Color(1.0f, 0.95f, 0.80f, 1.0f), 0.78f);
+            TriggerHaptic(heavy ? 34 : 20, heavy ? 220 : 150);
         }
 
         public void TriggerPerfectParry(Vector3 worldPos, int consecutiveCount)
         {
-            // Crisp 0.075s blade-lock hitstop right at the exact frame the two swords cross!
+            // Crisp 0.075s blade-lock hitstop + dramatic close-up camera cut-in + Dutch roll tilt!
             StartHitstop(0.075f, 0.015f);
-            AddShake(0.56f);
-            _zoomPunch = Mathf.Max(_zoomPunch, baseFov * 0.045f);
+            AddShake(0.62f);
+            _zoomPunch = Mathf.Max(_zoomPunch, baseFov * 0.070f);
+            _zPushIn = Mathf.Max(_zPushIn, 0.45f);
+            _rollFlipSign = -_rollFlipSign;
+            _cameraRoll = _rollFlipSign * 3.4f;
 
-            float pitch = Mathf.Min(1.22f, 0.98f + (consecutiveCount - 1) * 0.045f);
+            float pitch = Mathf.Min(1.24f, 0.98f + (consecutiveCount - 1) * 0.05f);
             PlayRandomClip(parryClips, 1.0f, pitch);
-            EmitParticles(_goldParryParticles, worldPos, 28);
-            EmitClashRing(worldPos, new Color(1.0f, 0.84f, 0.22f, 1f), 1.65f);
-            TriggerHaptic(24, 180);
+            EmitParticles(_goldParryParticles, worldPos, 36);
+            // Dual concentric Sekiro clash rings: blazing white-gold inner core + expanding golden shockwave!
+            EmitClashRing(worldPos, new Color(1.0f, 0.98f, 0.82f, 1f), 0.82f);
+            EmitClashRing(worldPos, new Color(1.0f, 0.82f, 0.18f, 1f), 1.75f);
+            TriggerHaptic(28, 200);
         }
 
         public void TriggerGuardBlock(Vector3 worldPos)
         {
-            StartHitstop(0.02f, 0.15f);
-            AddShake(0.22f);
-            PlayOneShot(guardClip, 0.82f, Random.Range(0.84f, 0.92f));
-            EmitParticles(_silverGuardParticles, worldPos, 12);
-            EmitClashRing(worldPos, new Color(0.82f, 0.88f, 0.95f, 0.70f), 0.95f);
-            TriggerHaptic(14, 95);
+            StartHitstop(0.032f, 0.10f);
+            AddShake(0.30f);
+            _zoomPunch = Mathf.Max(_zoomPunch, baseFov * 0.030f);
+            _zPushIn = Mathf.Max(_zPushIn, 0.25f);
+            PlayOneShot(guardClip, 0.92f, Random.Range(0.92f, 1.04f));
+            EmitParticles(_silverGuardParticles, worldPos, 18);
+            EmitParticles(_goldParryParticles, worldPos, 8);
+            EmitClashRing(worldPos, new Color(0.88f, 0.94f, 1.0f, 0.88f), 1.10f);
+            TriggerHaptic(18, 120);
         }
 
         public void TriggerGuardBreak(Vector3 worldPos)

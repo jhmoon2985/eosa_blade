@@ -28,20 +28,20 @@ namespace EosaBlade
     public class GeneralBossController : MonoBehaviour
     {
         [Header("Movement & Reach")]
-        [SerializeField] private float approachSpeed = 3.8f;
-        [SerializeField] private float engageDistance = 1.55f;
-        [SerializeField] private float strikeReach = 2.45f;
-        [SerializeField] private float thrustReach = 3.20f;
+        [SerializeField] private float approachSpeed = 5.2f;
+        [SerializeField] private float engageDistance = 1.82f;
+        [SerializeField] private float strikeReach = 2.75f;
+        [SerializeField] private float thrustReach = 3.50f;
         [SerializeField] private float arenaHalfWidth = 6.2f;
-        [SerializeField] private float minPlayerSeparation = 1.22f;
+        [SerializeField] private float minPlayerSeparation = 1.55f;
 
         [Header("Pattern Timings (Seconds)")]
-        [SerializeField] private float regularWindup1 = 0.44f;
-        [SerializeField] private float regularWindup2 = 0.38f;
-        [SerializeField] private float phase2Windup3 = 0.34f;
-        [SerializeField] private float delayedSlamWindup = 0.78f;
-        [SerializeField] private float perilousTelegraphDuration = 0.60f;
-        [SerializeField] private float perilousGanpaEarlyWindow = 0.38f;
+        [SerializeField] private float regularWindup1 = 0.42f;
+        [SerializeField] private float regularWindup2 = 0.34f;
+        [SerializeField] private float phase2Windup3 = 0.32f;
+        [SerializeField] private float delayedSlamWindup = 0.64f;
+        [SerializeField] private float perilousTelegraphDuration = 0.58f;
+        [SerializeField] private float perilousGanpaEarlyWindow = 0.40f;
         [SerializeField] private float executableDuration = 3.50f;
 
         [Header("References")]
@@ -73,10 +73,12 @@ namespace EosaBlade
         private CombatJuiceController _juice;
 
         private float _stateTimer;
-        private int _patternIndex; // Cycles cleanly: 0=2Hit -> 1=DelayedSlam -> 2=PerilousThrust
+        private int _patternIndex;
+        private int _lastPatternIndex = -1;
         private int _consecutiveHitsTaken;
         private bool _dangerVisible;
         private bool _execVisible;
+        private bool _glintFired;
 
         // Smooth physical lunge velocity (eliminates 1-frame teleportation!)
         private float _lungeVelocity;
@@ -112,9 +114,11 @@ namespace EosaBlade
             transform.position = spawnPos;
             Stats.ResetAll();
             State = BossState.IdleRecover;
-            _stateTimer = 0.75f;
+            _stateTimer = 0.25f;
             _patternIndex = 0;
+            _lastPatternIndex = -1;
             _consecutiveHitsTaken = 0;
+            _glintFired = false;
             SetDangerSign(false);
             SetExecutableSign(false);
             StopShockwave();
@@ -178,6 +182,7 @@ namespace EosaBlade
 
                 case BossState.Combo2Hit_Windup1:
                     _stateTimer -= dt;
+                    CheckPreStrikeGlint(0.15f);
                     if (_stateTimer <= 0f)
                     {
                         if (visual != null) visual.SetAttackComboVariant(1);
@@ -190,13 +195,13 @@ namespace EosaBlade
                             ParrySelfPostureDamage = 8f,
                             HitPostureDamage = 18f,
                             IsPerilous = false
-                        }, strikeReach, lunge: 0.45f);
+                        }, strikeReach, lunge: 0.48f);
 
                         if (State == BossState.Combo2Hit_Windup1)
                         {
-                            // Hold the extended blade contact pose for 0.16s so the sword visibly clashes/bites during hitstop!
+                            // Hold the extended blade contact pose for 0.12s so the sword visibly clashes/bites during hitstop!
                             State = BossState.Combo2Hit_Impact1;
-                            _stateTimer = 0.16f;
+                            _stateTimer = 0.12f;
                         }
                     }
                     break;
@@ -207,6 +212,7 @@ namespace EosaBlade
                     {
                         State = BossState.Combo2Hit_Windup2;
                         _stateTimer = regularWindup2;
+                        _glintFired = false;
                         if (visual != null)
                         {
                             visual.SetAttackComboVariant(2);
@@ -217,6 +223,7 @@ namespace EosaBlade
 
                 case BossState.Combo2Hit_Windup2:
                     _stateTimer -= dt;
+                    CheckPreStrikeGlint(0.14f);
                     if (_stateTimer <= 0f)
                     {
                         if (visual != null) visual.SetAttackComboVariant(2);
@@ -225,22 +232,23 @@ namespace EosaBlade
                             Kind = AttackKind.NormalSlash,
                             HpDamage = 18f,
                             GuardPostureDamage = 26f,
-                            ParryBossPostureDamage = 26f,
+                            ParryBossPostureDamage = 28f,
                             ParrySelfPostureDamage = 8f,
                             HitPostureDamage = 20f,
-                            IsPerilous = false
-                        }, strikeReach, lunge: 0.50f);
+                            IsPerilous = false,
+                            StaggerBossOnParry = (CurrentPhase == 1)
+                        }, strikeReach, lunge: 0.52f);
 
                         if (State == BossState.Combo2Hit_Windup2)
                         {
                             if (CurrentPhase == 2)
                             {
                                 State = BossState.Combo2Hit_Impact2;
-                                _stateTimer = 0.15f;
+                                _stateTimer = 0.11f;
                             }
                             else
                             {
-                                EnterRecovery(0.72f);
+                                EnterRecovery(0.58f);
                             }
                         }
                     }
@@ -252,6 +260,7 @@ namespace EosaBlade
                     {
                         State = BossState.Combo2Hit_Windup3Phase2;
                         _stateTimer = phase2Windup3;
+                        _glintFired = false;
                         if (visual != null)
                         {
                             visual.SetAttackComboVariant(3);
@@ -262,6 +271,7 @@ namespace EosaBlade
 
                 case BossState.Combo2Hit_Windup3Phase2:
                     _stateTimer -= dt;
+                    CheckPreStrikeGlint(0.14f);
                     if (_stateTimer <= 0f)
                     {
                         DeliverStrike(new IncomingStrike
@@ -269,21 +279,23 @@ namespace EosaBlade
                             Kind = AttackKind.NormalSlash,
                             HpDamage = 20f,
                             GuardPostureDamage = 28f,
-                            ParryBossPostureDamage = 28f,
+                            ParryBossPostureDamage = 32f,
                             ParrySelfPostureDamage = 9f,
                             HitPostureDamage = 22f,
-                            IsPerilous = false
-                        }, strikeReach + 0.15f, lunge: 0.48f);
+                            IsPerilous = false,
+                            StaggerBossOnParry = true
+                        }, strikeReach + 0.15f, lunge: 0.52f);
 
                         if (State == BossState.Combo2Hit_Windup3Phase2)
                         {
-                            EnterRecovery(0.68f);
+                            EnterRecovery(0.56f);
                         }
                     }
                     break;
 
                 case BossState.DelayedSlam_Windup:
                     _stateTimer -= dt;
+                    CheckPreStrikeGlint(0.16f);
                     if (_stateTimer <= 0f)
                     {
                         DeliverStrike(new IncomingStrike
@@ -291,22 +303,23 @@ namespace EosaBlade
                             Kind = AttackKind.DelayedHeavySlam,
                             HpDamage = 30f,
                             GuardPostureDamage = 42f,
-                            ParryBossPostureDamage = 34f,
+                            ParryBossPostureDamage = 36f,
                             ParrySelfPostureDamage = 10f,
                             HitPostureDamage = 30f,
-                            IsPerilous = false
-                        }, strikeReach + 0.30f, lunge: 0.55f);
+                            IsPerilous = false,
+                            StaggerBossOnParry = true
+                        }, strikeReach + 0.30f, lunge: 0.58f);
 
                         if (State == BossState.DelayedSlam_Windup)
                         {
-                            Vector3 slamPos = transform.position + Vector3.right * (FacingSign * 1.1f);
+                            Vector3 slamPos = transform.position + Vector3.right * (FacingSign * 1.0f);
                             _juice?.TriggerHeavySlamImpact(slamPos);
                             if (CurrentPhase == 2)
                             {
                                 SpawnGroundShockwave(slamPos.x, FacingSign);
                                 OnBossBanner?.Invoke("바닥 충격파! 회피/도약", new Color(0.95f, 0.28f, 0.16f, 1f));
                             }
-                            EnterRecovery(0.88f);
+                            EnterRecovery(0.65f);
                         }
                     }
                     break;
@@ -329,7 +342,7 @@ namespace EosaBlade
 
                         if (State == BossState.PerilousThrust_Telegraph)
                         {
-                            EnterRecovery(0.95f);
+                            EnterRecovery(0.64f);
                         }
                     }
                     break;
@@ -339,7 +352,7 @@ namespace EosaBlade
                     if (_stateTimer <= 0f)
                     {
                         State = BossState.IdleRecover;
-                        _stateTimer = CurrentPhase == 2 ? 0.35f : 0.55f;
+                        _stateTimer = CurrentPhase == 2 ? 0.14f : 0.22f;
                     }
                     break;
 
@@ -349,12 +362,12 @@ namespace EosaBlade
                     if (_stateTimer <= 0f)
                     {
                         State = BossState.IdleRecover;
-                        _stateTimer = 0.30f;
+                        _stateTimer = 0.12f;
                     }
                     break;
 
                 case BossState.Executable:
-                    if (visual != null) visual.SetPose(WeaponPose.Staggered);
+                    if (visual != null) visual.SetPose(WeaponPose.StanceBrokenKneel);
                     // Rule: If Boss HP is already 0, stay permanently staggered waiting for 인살 (NEVER refill HP!)
                     if (Stats.IsHpDepleted)
                     {
@@ -382,29 +395,67 @@ namespace EosaBlade
             }
         }
 
-        private void BeginNextPattern()
+        private void CheckPreStrikeGlint(float threshold)
+        {
+            if (!_glintFired && _stateTimer <= threshold)
+            {
+                _glintFired = true;
+                // Sharp white-gold blade glint star VFX + metallic ping right as the Perfect Parry window opens!
+                if (visual != null)
+                {
+                    visual.TriggerFlash(new Color(1.45f, 1.15f, 0.35f, 1f), 0.14f);
+                    _juice?.TriggerBladeGlint(visual.GetBladeMidpoint(), perilous: false);
+                }
+            }
+        }
+
+        private void BeginNextPattern(bool fastCounter = false)
         {
             _consecutiveHitsTaken = 0;
+            _glintFired = false;
 
-            switch (_patternIndex)
+            // Dynamic pattern selection: favors rapid sword exchanges at close range, mixes in Slam & Perilous Thrust without repeating
+            int chosen;
+            if (fastCounter)
+            {
+                // Immediate counter-slash after Boss deflects Player!
+                chosen = UnityEngine.Random.value < 0.72f ? 0 : 1;
+            }
+            else
+            {
+                int roll = UnityEngine.Random.Range(0, 100);
+                if (roll < 50) chosen = 0;
+                else if (roll < 76) chosen = 1;
+                else chosen = 2;
+                if (chosen == _lastPatternIndex && chosen != 0)
+                    chosen = 0;
+            }
+            _lastPatternIndex = chosen;
+            _patternIndex = chosen;
+
+            switch (chosen)
             {
                 case 0:
-                    // Pattern 1: Regular 2-hit slash (Phase 2: 3-hit spinning slash combo!)
+                    // Pattern 1: Rapid 2-hit / 3-hit sword exchange (챙! 챙! 캉!)
                     State = BossState.Combo2Hit_Windup1;
-                    _stateTimer = CurrentPhase == 2 ? regularWindup1 * 0.90f : regularWindup1;
+                    float w1 = CurrentPhase == 2 ? regularWindup1 * 0.88f : regularWindup1;
+                    _stateTimer = fastCounter ? w1 * 0.78f : w1;
                     if (visual != null)
+                    {
+                        visual.SetAttackComboVariant(1);
                         visual.SetPose(CurrentPhase == 2 ? WeaponPose.SpinSlash : WeaponPose.WindupForward);
+                    }
                     break;
 
                 case 1:
-                    // Pattern 2: Delayed overhead slam (하나, 둘... 쾅!)
+                    // Pattern 2: Heavy Overhead Cleave (쾅! + Phase 2 Shockwave)
                     State = BossState.DelayedSlam_Windup;
-                    _stateTimer = delayedSlamWindup;
+                    _stateTimer = fastCounter ? delayedSlamWindup * 0.80f : delayedSlamWindup;
                     if (visual != null) visual.SetPose(WeaponPose.WindupOverhead);
                     break;
 
                 case 2:
-                    // Pattern 3: Perilous Thrust (殺, 0.6s telegraph, Ganpa counter)
+                    // Pattern 3: Perilous Thrust (殺, Ganpa counter)
                     State = BossState.PerilousThrust_Telegraph;
                     _stateTimer = perilousTelegraphDuration;
                     SetDangerSign(true);
@@ -412,8 +463,6 @@ namespace EosaBlade
                     if (visual != null) visual.SetPose(WeaponPose.WindupThrustPerilous);
                     break;
             }
-
-            _patternIndex = (_patternIndex + 1) % 3;
         }
 
         private void StartSmoothLunge(float signedDistance, float duration)
@@ -493,21 +542,21 @@ namespace EosaBlade
                 return false;
             }
 
-            // Sekiro back-and-forth: after taking 2 rapid light hits while idle/approaching, Boss clangs/blocks & counters
-            bool canDeflectBack = (State == BossState.IdleRecover || State == BossState.Approach) &&
-                                  kind == AttackKind.PlayerLight &&
-                                  _consecutiveHitsTaken >= 2;
+            // Sekiro ping-pong rhythm:
+            // When Boss is neutral/approaching: Hit 1 cuts in, Hit 2 is blocked with his sword ("챙!", 0 HP damage), Hit 3+ (including heavy/mapae spam!) is deflected ("캉!") into an immediate counter-slash!
+            bool isNeutral = (State == BossState.IdleRecover || State == BossState.Approach || State == BossState.AttackRecovery);
+            bool canDeflectBack = isNeutral && _consecutiveHitsTaken >= 2;
 
             if (canDeflectBack)
             {
                 _consecutiveHitsTaken = 0;
                 Stats.AddPosture(postureDamage * 0.55f, canBreak: true);
                 Vector3 deflectPos = visual != null ? visual.GetBladeMidpoint() : impactPos;
-                _juice?.TriggerGuardBlock(deflectPos);
+                _juice?.TriggerPerfectParry(deflectPos, 2);
                 if (visual != null)
                 {
                     visual.SetPose(WeaponPose.ParryFlash);
-                    visual.TriggerFlash(new Color(0.95f, 0.85f, 0.55f, 1f), 0.18f);
+                    visual.TriggerFlash(new Color(1.2f, 0.88f, 0.25f, 1f), 0.22f);
                 }
 
                 if (Stats.IsPostureFull)
@@ -516,10 +565,37 @@ namespace EosaBlade
                     return true;
                 }
 
-                // Hold brief visible sword-deflect beat (0.18s) before counterattacking
-                State = BossState.AttackRecovery;
-                _stateTimer = 0.18f;
+                // Immediately transition into fast counter-slash after deflecting Player!
+                BeginNextPattern(fastCounter: true);
                 return true;
+            }
+
+            // On Hit 2 in neutral, Boss raises his 대도 to block ("챙!") with silver-gold sparks (0 HP damage!) before deflecting the next blow!
+            if (isNeutral && kind == AttackKind.PlayerLight && _consecutiveHitsTaken == 1 && !isHeavyHit)
+            {
+                _consecutiveHitsTaken++;
+                bool guardBroke = Stats.AddPosture(postureDamage * 0.85f, canBreak: true);
+                Vector3 blockPos = visual != null ? visual.GetBladeMidpoint() : impactPos;
+                _juice?.TriggerGuardBlock(blockPos);
+                if (visual != null)
+                {
+                    visual.SetPose(WeaponPose.Guard);
+                    visual.TriggerGuardImpact();
+                    visual.TriggerFlash(new Color(0.92f, 0.95f, 1.0f, 1f), 0.14f);
+                }
+                if (guardBroke)
+                {
+                    EnterExecutableState();
+                }
+                return false;
+            }
+
+            // Bonus Punish Damage when Player counter-attacks while Boss is wide open in ParriedStagger!
+            if (State == BossState.ParriedStagger)
+            {
+                hpDamage *= 1.35f;
+                postureDamage *= 1.45f;
+                isHeavyHit = true;
             }
 
             _consecutiveHitsTaken++;
@@ -539,17 +615,20 @@ namespace EosaBlade
                 return false;
             }
 
-            // Interrupt Idle/Approach/Recovery with crisp recoil stagger + pushback so hitting Boss feels meaty!
-            bool interruptible = State == BossState.IdleRecover ||
-                                 State == BossState.Approach ||
-                                 State == BossState.AttackRecovery ||
-                                 State == BossState.ParriedStagger;
+            // Interrupt ONLY Idle/Approach/Recovery/ParriedStagger so Player cannot infinite-stunlock Boss out of active attack windups without parrying!
+            bool interruptible = isNeutral || State == BossState.ParriedStagger;
             if (interruptible)
             {
+                SetDangerSign(false);
                 State = BossState.ParriedStagger;
-                _stateTimer = isHeavyHit ? 0.36f : 0.22f;
-                StartSmoothLunge(-FacingSign * (isHeavyHit ? 0.42f : 0.22f), 0.12f);
+                _stateTimer = isHeavyHit ? 0.42f : 0.26f;
+                StartSmoothLunge(-FacingSign * (isHeavyHit ? 0.44f : 0.24f), 0.13f);
                 if (visual != null) visual.SetPose(WeaponPose.Staggered);
+            }
+            else if (visual != null)
+            {
+                // During active Boss attack windups (hyper-armor), show impact jolt without cancelling the Boss's swing!
+                visual.TriggerGuardImpact();
             }
 
             return false;
@@ -619,9 +698,10 @@ namespace EosaBlade
             _juice?.TriggerGuardBreak(transform.position + Vector3.up * 1.3f);
             if (visual != null)
             {
-                visual.SetPose(WeaponPose.Staggered);
-                visual.TriggerFlash(new Color(0.92f, 0.15f, 0.15f, 1f), 0.30f);
+                visual.SetPose(WeaponPose.StanceBrokenKneel);
+                visual.TriggerFlash(new Color(0.92f, 0.15f, 0.15f, 1f), 0.35f);
             }
+            OnBossBanner?.Invoke("적 체간 붕괴! 인살!", new Color(0.95f, 0.20f, 0.16f, 1f));
         }
 
         private void EnterRecovery(float duration)

@@ -39,6 +39,7 @@ namespace EosaBlade.Editor
         private const string BtnDodgePath = "Assets/Art/UI/btn_dodge.png";
         private const string DangerSalPath = "Assets/Art/UI/ui_danger_sal.png";
         private const string IconFirePath = "Assets/Art/UI/icon_fire_talisman.png";
+        private const string AppIconPath = "Assets/Art/UI/icon_app_eosa.png";
         private const string SparkTexPath = "Assets/Art/VFX/tex_spark_streak.png";
         private const string ClashRingTexPath = "Assets/Art/VFX/tex_clash_ring.png";
         private const string SlashTrailTexPath = "Assets/Art/VFX/tex_slash_trail.png";
@@ -70,10 +71,10 @@ namespace EosaBlade.Editor
         {
             PlayerSettings.companyName = "KoonKim";
             PlayerSettings.productName = "어사검";
-            PlayerSettings.bundleVersion = "0.2.5";
+            PlayerSettings.bundleVersion = "0.2.6";
 
             PlayerSettings.SetApplicationIdentifier(UnityEditor.Build.NamedBuildTarget.Android, "com.koonkim.eosablade");
-            PlayerSettings.Android.bundleVersionCode = 7;
+            PlayerSettings.Android.bundleVersionCode = 8;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel25;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             PlayerSettings.SetScriptingBackend(UnityEditor.Build.NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
@@ -108,6 +109,13 @@ namespace EosaBlade.Editor
             ConfigureTexture(BtnDodgePath, asSprite: true, maxSize: 256);
             ConfigureTexture(DangerSalPath, asSprite: true, maxSize: 512);
             ConfigureTexture(IconFirePath, asSprite: true, maxSize: 256);
+            ConfigureTexture(AppIconPath, asSprite: false, maxSize: 512);
+
+            Texture2D appIconTex = AssetDatabase.LoadAssetAtPath<Texture2D>(AppIconPath);
+            if (appIconTex != null)
+            {
+                PlayerSettings.SetIcons(UnityEditor.Build.NamedBuildTarget.Unknown, new[] { appIconTex }, IconKind.Any);
+            }
             ConfigureTexture(SparkTexPath, asSprite: false, maxSize: 128);
             ConfigureTexture(ClashRingTexPath, asSprite: false, maxSize: 256);
             ConfigureTexture(SlashTrailTexPath, asSprite: false, maxSize: 256);
@@ -301,6 +309,13 @@ namespace EosaBlade.Editor
                 if (i == 0) idleState = st;
             }
 
+            // Add dedicated "RunBack" state (reversed stride cycle -1.05x so feet step genuinely BACKWARD when retreating!)
+            AnimationClip runClip = LoadFirstClip($"{AnimDir}/anim_run.fbx");
+            AnimatorState runBackState = sm.AddState("RunBack", new Vector3(520f, 56f, 0f));
+            runBackState.motion = runClip;
+            runBackState.speed = -1.05f;
+            runBackState.writeDefaultValues = true;
+
             if (idleState != null) sm.defaultState = idleState;
             EditorUtility.SetDirty(controller);
             return controller;
@@ -325,45 +340,45 @@ namespace EosaBlade.Editor
             Directory.CreateDirectory(MaterialsDir);
             Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
-            // 1. Single-light Moonlit Joseon Trilight Ambient (0 additional lights -> ~30% cheaper mobile fragment shaders!)
+            // 1. High-Contrast Moonlit Joseon Trilight Ambient (brightened so dark navy robes & armor pop cleanly on phone screens!)
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.36f, 0.46f, 0.62f, 1f);
-            RenderSettings.ambientEquatorColor = new Color(0.24f, 0.30f, 0.40f, 1f);
-            RenderSettings.ambientGroundColor = new Color(0.11f, 0.13f, 0.17f, 1f);
+            RenderSettings.ambientSkyColor = new Color(0.55f, 0.68f, 0.88f, 1f);
+            RenderSettings.ambientEquatorColor = new Color(0.40f, 0.48f, 0.62f, 1f);
+            RenderSettings.ambientGroundColor = new Color(0.20f, 0.24f, 0.30f, 1f);
             RenderSettings.fog = false;
 
-            // Single directional moonlight key light (zero additional-light pass overhead)
+            // Single directional moonlight key light (high-contrast rim & blade highlight)
             GameObject keyLightGo = new GameObject("Moonlight_Key");
             Light keyLight = keyLightGo.AddComponent<Light>();
             keyLight.type = LightType.Directional;
-            keyLight.color = new Color(0.86f, 0.92f, 1.0f, 1f);
-            keyLight.intensity = 1.55f;
+            keyLight.color = new Color(0.92f, 0.96f, 1.0f, 1f);
+            keyLight.intensity = 2.25f;
             keyLight.shadows = LightShadows.Hard;
-            keyLightGo.transform.rotation = Quaternion.Euler(34f, -26f, 0f);
+            keyLightGo.transform.rotation = Quaternion.Euler(32f, -24f, 0f);
 
-            // 2. Side-View 2.5D Main Camera
+            // 2. Balanced Side-View 2.5D Main Camera (-6.10m distance -> large readable characters while keeping raised overhead swords 100% inside screen bounds!)
             GameObject camGo = new GameObject("Main Camera");
             camGo.tag = "MainCamera";
             Camera cam = camGo.AddComponent<Camera>();
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.055f, 0.068f, 0.095f, 1f);
-            cam.fieldOfView = 36f;
+            cam.fieldOfView = 35f;
             cam.nearClipPlane = 0.3f;
             cam.farClipPlane = 80f;
-            camGo.transform.position = new Vector3(0f, 1.95f, -7.8f);
-            camGo.transform.LookAt(new Vector3(0f, 1.15f, 0f));
+            camGo.transform.position = new Vector3(0f, 1.56f, -6.10f);
+            camGo.transform.LookAt(new Vector3(0f, 1.12f, 0f));
             camGo.AddComponent<AudioListener>();
 
-            // 3. Materials (matte silk for Hero, weathered armor for Boss, ink-wash cobblestone courtyard floor)
-            Material floorMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_StoneFloor.mat", LoadTex(FloorTexPath), new Color(0.72f, 0.78f, 0.85f, 1f), 0.0f, 0.08f);
+            // 3. Materials (low-metallic bright steel for weapons so blades NEVER reflect black skybox!)
+            Material floorMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_StoneFloor.mat", LoadTex(FloorTexPath), new Color(0.68f, 0.74f, 0.82f, 1f), 0.0f, 0.08f);
             floorMat.SetTextureScale("_BaseMap", new Vector2(6f, 2.5f));
             floorMat.SetTextureScale("_MainTex", new Vector2(6f, 2.5f));
             EditorUtility.SetDirty(floorMat);
-            Material heroMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_HeroEosa.mat", LoadTex(HeroTexPath), Color.white, 0.04f, 0.12f);
-            Material bossMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_BossGeneral.mat", LoadTex(BossTexPath), Color.white, 0.24f, 0.28f);
-            Material hwandoMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_WeaponHwando.mat", LoadTex(HwandoTexPath), Color.white, 0.68f, 0.65f);
-            Material bossBladeMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_BossBlade.mat", LoadTex(HwandoTexPath), new Color(0.72f, 0.64f, 0.58f, 1f), 0.72f, 0.58f);
-            Material mapaeMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_WeaponMapae.mat", LoadTex(MapaeTexPath), Color.white, 0.72f, 0.62f);
+            Material heroMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_HeroEosa.mat", LoadTex(HeroTexPath), Color.white, 0.02f, 0.18f);
+            Material bossMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_BossGeneral.mat", LoadTex(BossTexPath), Color.white, 0.08f, 0.28f);
+            Material hwandoMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_WeaponHwando.mat", LoadTex(HwandoTexPath), Color.white, 0.06f, 0.42f);
+            Material bossBladeMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_BossBlade.mat", LoadTex(HwandoTexPath), new Color(1.0f, 0.86f, 0.72f, 1f), 0.08f, 0.40f);
+            Material mapaeMat = CreateUrpLitMaterial($"{MaterialsDir}/Mat_WeaponMapae.mat", LoadTex(MapaeTexPath), Color.white, 0.12f, 0.48f);
             Material bgMat = CreateUrpUnlitMaterial($"{MaterialsDir}/Mat_BgMountainTemple.mat", LoadTex(BgTemplePath));
             Material trailMat = CreateAdditiveVfxMaterial($"{MaterialsDir}/Mat_SwordTrail.mat", LoadTex(SlashTrailTexPath));
             Material sparkMat = CreateAdditiveVfxMaterial($"{MaterialsDir}/Mat_SparkParticle.mat", LoadTex(SparkTexPath));
@@ -561,9 +576,17 @@ namespace EosaBlade.Editor
                 GameObject weaponGo = (GameObject)PrefabUtility.InstantiatePrefab(weaponPrefab);
                 weaponGo.name = "EquippedBlade";
                 weaponGo.transform.SetParent(rightHand, false);
-                // Center wrapped grip directly inside palm; +85 X aligns +Y sword blade cleanly forward-up
-                weaponGo.transform.localPosition = new Vector3(0.0f, 0.05f, 0.02f) / rhScale;
-                weaponGo.transform.localRotation = Quaternion.Euler(85f, 0f, 0f);
+                // Mixamo RightHand axes:
+                //   local +Y = wrist -> fingertips
+                //   local +Z = back-of-hand -> palm face (inward into palm cup!)
+                //   local -X = pinky side -> thumb side (the actual sword-grip tunnel!)
+                // Euler(0, 0, 90) aligns weapon +Y (blade) along RightHand local -X (out the thumb side of the fist!),
+                // and localPosition (0, +0.105, +0.032) places the hilt right inside the cupped palm & curled fingers!
+                float palmOffsetY = attachMapae ? 0.105f : 0.135f;
+                float palmCupZ = attachMapae ? 0.032f : 0.042f;
+                weaponGo.transform.localPosition = new Vector3(0.0f, palmOffsetY, palmCupZ) / rhScale;
+                // Euler(0, 0, 90) aligns weapon +Y (blade) along RightHand local -X (out the thumb side of the fist!)
+                weaponGo.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
                 weaponGo.transform.localScale = Vector3.one * (weaponScale / rhScale);
 
                 foreach (Renderer r in weaponGo.GetComponentsInChildren<Renderer>(true))
@@ -578,12 +601,12 @@ namespace EosaBlade.Editor
                 clashAnchor = tipGo.transform;
 
                 swordTrail = tipGo.AddComponent<TrailRenderer>();
-                swordTrail.time = 0.14f;
-                swordTrail.minVertexDistance = 0.04f;
+                swordTrail.time = 0.19f;
+                swordTrail.minVertexDistance = 0.03f;
                 swordTrail.widthCurve = new AnimationCurve(
-                    new Keyframe(0f, 0.34f * weaponScale),
-                    new Keyframe(0.35f, 0.26f * weaponScale),
-                    new Keyframe(1f, 0.01f));
+                    new Keyframe(0f, 0.62f * weaponScale),
+                    new Keyframe(0.40f, 0.46f * weaponScale),
+                    new Keyframe(1f, 0.02f));
                 swordTrail.textureMode = LineTextureMode.Stretch;
                 swordTrail.numCornerVertices = 4;
                 swordTrail.numCapVertices = 2;
@@ -604,7 +627,7 @@ namespace EosaBlade.Editor
                     GameObject mapaeGo = (GameObject)PrefabUtility.InstantiatePrefab(mapaePrefab);
                     mapaeGo.name = "EquippedMapae";
                     mapaeGo.transform.SetParent(leftHand, false);
-                    mapaeGo.transform.localPosition = new Vector3(0f, 0.07f, 0.03f) / lhScale;
+                    mapaeGo.transform.localPosition = new Vector3(0f, 0.125f, 0.02f) / lhScale;
                     mapaeGo.transform.localRotation = Quaternion.Euler(0f, 90f, 0f);
                     mapaeGo.transform.localScale = Vector3.one * (0.72f / lhScale);
                     foreach (Renderer r in mapaeGo.GetComponentsInChildren<Renderer>(true))
@@ -630,6 +653,11 @@ namespace EosaBlade.Editor
         [MenuItem("EosaBlade/2. Capture Camera Diagnostic Screenshots")]
         public static void CaptureDiagnosticScreenshots()
         {
+            if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
+            {
+                Debug.Log("[EosaBlade] Skipping CaptureDiagnosticScreenshots under NullGfxDevice (-nographics).");
+                return;
+            }
             EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
             string outDir = @"C:\Users\user\.gemini\antigravity-cli\brain\dbac198a-fa9e-4371-a3f1-fe0063838f52\scratch";
             Directory.CreateDirectory(outDir);
@@ -653,6 +681,7 @@ namespace EosaBlade.Editor
                     anim.Play("Idle", 0, 0.25f);
                     anim.Update(0.05f);
                     anim.Update(0.05f);
+                    vis.ApplyPoseNowForPreview(WeaponPose.Idle);
                 }
             }
 
